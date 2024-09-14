@@ -10,6 +10,7 @@ library(reshape2)
 library(ggplot2)
 library(tidybayes)
 library(plyr)
+library(cowplot)
 
 set_cmdstan_path("...")
 
@@ -151,12 +152,17 @@ cmat.n = apply(cmat.id, 1, FUN = function(x) sum(!is.na(x)) )
 cmat.id[is.na(cmat.id)] = 0
 cnt = sum(cmat.n)
 
-#vectors indexing positions in nctot
+#vectors indexing individual_context
+
+#fd$cid_fid = paste(fd$focal_fd, fd$c_fd,sep="_")
+#bs$cid_fid = paste(bs$focal_bs, bs$c_bs,sep="_")
+#gd$cid_fid = paste(gd$focal_gd, gd$c_gd,sep="_")
+
 temp = t(cmat.id)
 corder = data.frame(id = temp[temp>0], c = rep(seq(1:nrow(cmat.id)), times = cmat.n))
-fd$cid_fid = match(paste0(fd$focal_fd, fd$c_fd,sep="_"), paste0(corder$id,corder$c,sep="_"))
-bs$cid_fid = match(paste0(bs$focal_bs, bs$c_bs,sep="_"), paste0(corder$id,corder$c,sep="_"))
-gd$cid_fid = match(paste0(gd$focal_gd, gd$c_gd,sep="_"), paste0(corder$id,corder$c,sep="_"))
+fd$cid_fid = match(paste(fd$focal_fd, fd$c_fd,sep="_"), paste(corder$id,corder$c,sep="_"))
+bs$cid_fid = match(paste(bs$focal_bs, bs$c_bs,sep="_"), paste(corder$id,corder$c,sep="_"))
+gd$cid_fid = match(paste(gd$focal_gd, gd$c_gd,sep="_"), paste(corder$id,corder$c,sep="_"))
 
 #standardize centered covariates for effect size comparison
 contexts$age = (contexts$age - mean(contexts$age))/sd(contexts$age)
@@ -167,7 +173,8 @@ gd$offset = gd$offset.min.cent/sd(gd$offset.min.cent)
 
 #create matrix of environmental predictors (nrow = # unique contexts of measurement)
 X = data.frame(model.matrix(rep(1,nrow(contexts)) ~ 
-                              age + sex.m + dominant + groupsize, data = contexts))
+                              age*sex.m*dominant + + groupsize + I(groupsize^2), 
+                              data = contexts))
 
 #data list for Stan
 stan.df = list(
@@ -249,8 +256,7 @@ est = mod$sample(
   max_treedepth = 12,
   refresh = 10) 
 
-fit = read_stan_csv(est$output_files())
-saveRDS(fit, "fit_meerkat_CRN.RDS")
+saveRDS(est, "fit_meerkat_CRN.RDS")
 fit = readRDS("fit_meerkat_CRN.RDS")
 launch_shinystan(fit)
 
@@ -301,6 +307,7 @@ aggregate(.~ element, data = cor_b, FUN = function(x)
 #posterior 90% CIs
 aggregate(.~ element, data = cor_b, FUN = function(x) 
   round(quantile(x, c(0.05,0.95)),2), simplify = F)
+
 
 #plot posteriors of beta coefficients####################
 v_bl = melt(v_b)
@@ -369,9 +376,23 @@ save_plot("fig 3a.png", cbp, base_height = 5, base_width = 8)
 #X_pred columns must follow order of original design matrix
 #colnames(stan.df$X), but the colnames of X_pred are arbitrary
 
-seqp = seq(-2,2, by = 0.3) #standardized values from -2 to +2
-X_pred = data.frame(int = 1, age = 0, sex = 0, 
-                    dominant = 0, groupsize = seqp)
+#sex x dom across ages
+{
+seqp = seq(-1,1, by = 0.2) #standardized values from -2 to +2
+#agev = rep(seqp, 4)
+#sexv = rep(c(0,0,1,1),each=length(seqp))
+#domv = rep(c(0,1,0,1),each=length(seqp))
+agev = rep(seqp, 4)
+sexv = rep(c(0,0,1,1),each=length(seqp))
+domv = rep(c(0,1,0,1),each=length(seqp))
+
+X_pred = data.frame(int = 1, age = agev,
+                    sex = sexv, dominant = domv,
+                    groupsize = 0, I.groupsize.2. = 0,
+                    age.sex.m = agev * sexv,
+                    age.dominant = agev * domv, 
+                    sex.m.dominant = sexv * domv,
+                    age.sex.m.dominant = agev * sexv * domv)
 
 mv_var = v_f(x = X_pred, traits = traits, v_b = post$B_v)
 mv_cpc = cpc_f(x = X_pred, cpc_b = post$B_cpc)
@@ -381,19 +402,20 @@ mv_cov = cov_f(x = X_pred, traits = traits, v_b = post$B_v, cpc = mv_cpc)
 mv_cor$element = factor(mv_cor$element, levels = c("FD_BS", "FD_GD", "BS_GD"))
 mv_cov$element = factor(mv_cov$element, levels = c("FD_BS", "FD_GD", "BS_GD"))
 
-
 levels=6
-
-gs_cov = 
+gs_cov1 = 
     ggplot(mv_cov, 
-      aes(x = groupsize, y = value))+ 
-      scale_x_continuous(expand=c(0,0), labels = c("","-1","0","1",""))+
+      aes(x = age, y = value, color = as.factor(sex), fill = as.factor(sex)))+ 
+      coord_cartesian(ylim = c(-1,1))+
+  scale_x_continuous(expand=c(0,0), labels = c("-1","","0","","1"))+
+  scale_y_continuous(expand=c(0,0), labels = c("-1","","0","","1"))+
       geom_hline(yintercept = 0, lty = "dashed")+
       geom_vline(xintercept = 0, lty = "dashed")+
-      stat_lineribbon(size=2, .width = ppoints(levels), alpha=0.5/levels,
-                      color = "#13accf", fill = "#13accf")+
-      labs(y=bquote(bold(paste(sigma[a]))), x = "group size (standardized)")+
-      facet_wrap(.~ element)+
+      stat_lineribbon(size=2, .width = ppoints(levels), alpha=0.5/levels)+
+      scale_color_manual(values = c("orange2","blue4"))+
+      scale_fill_manual(values = c("orange2","blue4"))+
+      labs(y=bquote(bold(paste(sigma[a]))), x = "age (standardized)")+
+      facet_wrap(.~ dominant * element)+
       theme(plot.title =element_text(size=12, face="bold",hjust=0.5),
         axis.ticks.y=element_blank(),
         axis.ticks.x=element_blank(),
@@ -409,10 +431,82 @@ gs_cov =
         panel.background= element_blank(),
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank(),
-        plot.margin = unit(c(0.1,0.5,0.5,0.5), "cm"))+
+        plot.margin = unit(c(0.1,0.5,0.5,0.5), "cm"),
+        panel.spacing.x = unit(2, "lines"))+
         guides(fill="none", color ="none")
+}
 
-cpp = plot_grid(cbp, gs_cov, ncol = 1, rel_heights = c(1.3,0.7))
-save_plot("fig 3comb.png", cpp, base_height = 7.5, base_width = 7)
+#group size
+{
+  seqp = seq(-1,1, by = 0.2) #standardized values from -2 to +2
+  #gsv = rep(seqp, 4)
+  #sexv = rep(c(0,1,0,1),each=length(seqp))
+  #agev = rep(c(0,0,1,1),each=length(seqp))
+  
+  #gsv = rep(seqp, 4*2)
+  #agev = rep(c(-1,1,-1,1,-1,1,-1,1),each=length(seqp))
+  #sexv = rep(c(0,0,1,1),each=length(2*seqp))
+  #domv = rep(c(0,1,0,1),each=length(2*seqp))
+  
+  #X_pred = data.frame(int = 1, age = agev, sex = sexv, dominant = 0, 
+  #                    groupsize = gsv, I.groupsize.2. = gsv*gsv,
+  #                    age.sex.m = agev*sexv,
+  #                    age.dominant = agev*domv, 
+  #                    sex.m.dominant = sexv*domv,
+  #                    age.sex.m.dominant = agev*sexv*domv)
+  
+  X_pred = data.frame(int = 0, age = 0, sex = 0, dominant = 0, 
+                      groupsize = seqp, I.groupsize.2. = seqp*seqp,
+                      age.sex.m = 0,
+                      age.dominant = 0, 
+                      sex.m.dominant = 0,
+                      age.sex.m.dominant = 0)
+  
+  mv_var = v_f(x = X_pred, traits = traits, v_b = post$B_v)
+  mv_cpc = cpc_f(x = X_pred, cpc_b = post$B_cpc)
+  mv_cor = cor_f(x = X_pred, traits = traits,  cpc = mv_cpc)
+  mv_cov = cov_f(x = X_pred, traits = traits, v_b = post$B_v, cpc = mv_cpc)
+  
+  mv_cor$element = factor(mv_cor$element, levels = c("FD_BS", "FD_GD", "BS_GD"))
+  mv_cov$element = factor(mv_cov$element, levels = c("FD_BS", "FD_GD", "BS_GD"))
+  
+  
+  levels=6
+  color = fill = "orchid"
+  
+  gs_cov2 = 
+    ggplot(mv_cov, 
+           aes(x = groupsize, y = value))+ 
+    coord_cartesian(ylim = c(-0.3,0.3))+
+    scale_x_continuous(expand=c(0,0), labels = c("-1","","0","","1"))+
+    #scale_y_continuous(expand=c(0,0), labels = c("-0.2","","0","","0.5"))+
+    geom_hline(yintercept = 0, lty = "dashed")+
+    geom_vline(xintercept = 0, lty = "dashed")+
+    stat_lineribbon(size=2, .width = ppoints(levels), alpha=0.5/levels,
+                    fill = fill, color = color)+
+    labs(y=bquote(bold(paste(sigma[a]))), x = "group size (standardized)")+
+    facet_wrap(.~ element)+
+    theme(plot.title =element_text(size=12, face="bold",hjust=0.5),
+          axis.ticks.y=element_blank(),
+          axis.ticks.x=element_blank(),
+          axis.title.x=element_text(size=12,face="bold"),
+          axis.title.y=element_text(size=12,face="bold", angle = 0, vjust = 0.5),
+          axis.text.x=element_text(size=10),
+          axis.text.y=element_text(size=10),
+          axis.line = element_line(size = 1),
+          panel.border=element_rect(fill=NA,color="black", linewidth=1, 
+                                    linetype="solid"),
+          strip.text = element_text(size = 12, face = "bold"),
+          strip.background = element_blank(),
+          panel.background= element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          plot.margin = unit(c(0.1,0.5,0.5,0.5), "cm"),
+          panel.spacing.x = unit(2, "lines"))+
+          guides(fill="none", color ="none")
+}
+    
+cpp = plot_grid(gs_cov1, gs_cov2, ncol = 1, rel_heights = c(0.66,0.34))
+save_plot("fig 4bc.png", cpp, base_height = 7, base_width = 6)
 
 

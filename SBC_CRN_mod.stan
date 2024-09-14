@@ -48,19 +48,19 @@ data{
   int<lower=1> D;
   int<lower=0> P;
   
-  int<lower=0> id[N];
-  int<lower=0> c_id[N];
-  int<lower=0> idc[N];
+  array[N] int<lower=0> id;
+  array[N] int<lower=0> c_id;
+  array[N] int<lower=0> idc;
   
   matrix[C,P] X;
   matrix[I,I] A;
   
   int<lower=1> cm;
-  int cmat[C, cm]; //array of integers
-  int<lower=0> cn[C];
+  array[C, cm] int cmat; //array of integers
+  array[C] int<lower=0> cn;
   int<lower=1> cnt;
   
-  vector[D] z[N];
+  array[N] vector[D] z;
 }
 
 transformed data{

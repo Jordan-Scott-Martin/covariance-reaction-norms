@@ -61,37 +61,38 @@ data {
   
   int<lower=0> cm;
   int<lower=0> cnt;
-  int<lower=0> cn[C];
-  int<lower=0> cfid_fd[nfd];
-  int<lower=0> cfid_bs[nbs];
-  int<lower=0> cfid_gd[ngd];
-  int cmat[C, cm];
+  array[C] int<lower=0> cn;
+  array[nfd] int<lower=0> cfid_fd;
+  array[nbs] int<lower=0> cfid_bs;
+  array[ngd] int<lower=0> cfid_gd;
+  array[C, cm] int cmat;
   
-  int<lower=0> focal_fd[nfd];
-  int<lower=0> focal_bs[nbs];
-  int<lower=0> focal_gd[ngd];
-  int<lower=0> context_fd[nfd];
-  int<lower=0> context_bs[nbs];
-  int<lower=0> context_gd[ngd];
-  int<lower=0> group_fd[nfd];
-  int<lower=0> group_bs[nbs];
-  int<lower=0> group_gd[ngd];
-  int<lower=0> season_fd[nfd];
-  int<lower=0> season_bs[nbs];
-  int<lower=0> season_gd[ngd];
-  int<lower=0> fxs_fd[nfd];
-  int<lower=0> fxs_bs[nbs];
-  int<lower=0> fxs_gd[ngd];
+  array[nfd] int<lower=0> focal_fd;
+  array[nbs] int<lower=0> focal_bs;
+  array[ngd] int<lower=0> focal_gd;
+  array[nfd] int<lower=0> context_fd;
+  array[nbs] int<lower=0> context_bs;
+  array[ngd] int<lower=0> context_gd;
+  array[nfd] int<lower=0> group_fd;
+  array[nbs] int<lower=0> group_bs;
+  array[ngd] int<lower=0> group_gd;
+  array[nfd] int<lower=0> season_fd;
+  array[nbs] int<lower=0> season_bs;
+  array[ngd] int<lower=0> season_gd;
+  array[nfd] int<lower=0> fxs_fd;
+  array[nbs] int<lower=0> fxs_bs;
+  array[ngd] int<lower=0> fxs_gd;
   
   matrix[nfocal,nfocal] A;
   matrix[C,P] X;
   vector[nfd] offset_fd;
   vector[ngd] offset_gd;
   
-  int feed[nfd];
-  int babysit[nbs];
-  int bs_tot[nbs];
-  int guard[ngd];
+  
+  array[nfd] int feed;
+  array[nbs] int babysit;
+  array[nbs] int bs_tot;
+  array[ngd] int guard;
 }
 
 transformed data{

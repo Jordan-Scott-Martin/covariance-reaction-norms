@@ -1,4 +1,4 @@
-list.of.packages = c("reshape2", "ggplot2","tidybayes","plyr","mvtnorm","rethinking", "devtools")
+list.of.packages = c("reshape2", "ggplot2","tidybayes","plyr","mvtnorm","rethinking", "devtools", "posterior")
 new.packages = list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
 if("rethinking" %in% new.packages) devtools::install_github("rmcelreath/rethinking")
@@ -9,6 +9,7 @@ library(tidybayes)
 library(plyr)
 library(mvtnorm)
 library(rethinking)
+library(posterior)
 
 #this function generates single measure/subject data for a
 #quantitative genetic CRN analysis using a supplied matrix 
@@ -141,14 +142,25 @@ sim_CRN_QG = function(N, Nc, npred, ntrait, l_es, u_es){
        sd_E = rep(1,ntrait), E = t(chol(E)) %*% chol(E))
 }
 
-#these functions are necessary for predicting environmental effects
+#this function simplifies the extraction of posterior samples
+#from cmdstan objects to match traditional rstan functions
+extract = function(fit_obj) {
+  vars = fit_obj$metadata()$stan_variables
+  draws = posterior::as_draws_rvars(fit_obj$draws())
+  
+  lapply(vars, \(var_name){  
+    posterior::draws_of(draws[[var_name]], with_chains = FALSE)
+  }) |> setNames(vars)
+}
+
+#functions below are necessary for predicting environmental effects
 #on trait variances, correlations, and covariances using the 
 #posterior MCMC samples from a CRN Stan model
 
 #this function generates Cholesky factorized correlation matrices
 #from posterior samples of canonical partial correlations
 #the function is used within other functions below
-lkj_to_chol_corr <- function(constrained_reals, ntrait) {
+lkj_to_chol_corr = function(constrained_reals, ntrait) {
   x = matrix(0, nrow=ntrait, ncol=ntrait)
   x[1,1] = 1
 
@@ -226,10 +238,10 @@ cor_f = function(x, traits, cpc){
                            element2 = which(upper.tri(m),arr.ind=TRUE)[,2],
                            correlation = m[upper.tri(m)], npred = p) 
     }
-    df = Reduce(rbind.data.frame, temp)
+    df = do.call(rbind.data.frame, c(temp, row.names = NULL))
     cor_p[[i]] = df
     }
-  cor_p = Reduce(rbind.data.frame, cor_p)
+  cor_p = do.call(rbind.data.frame, cor_p)
   cor_pl = melt(cor_p, id.vars = c("npred","element1","element2"))
   cor_pl = cor_pl[order(cor_pl$npred),]
   
@@ -238,7 +250,7 @@ cor_f = function(x, traits, cpc){
   cor_pl$element2 = setNames(key$new_name, key$old_name)[cor_pl$element2]
   cor_pl$element = apply(cor_pl[,c("element1","element2")], 1, paste0, collapse = "_")
   
-  cor_pl = cbind(cor_pl, x[rep(seq_len(nrow(x)), each = ntrait * length(cpc)), ])
+  cor_pl = cbind(cor_pl, x[rep(seq_len(nrow(x)), each = ntrait * length(cpc)), ], row.names = NULL)
   return(cor_pl)
 }
 
@@ -276,10 +288,10 @@ cov_f = function(x, traits, v_b, cpc){
                            element2 = which(upper.tri(m),arr.ind=TRUE)[,2],
                            correlation = m[upper.tri(m)], npred = p) 
     }
-    df = Reduce(rbind.data.frame, temp)
+    df = do.call(rbind.data.frame, c(temp, make.row.names = F))
     cov_p[[i]] = df
     }
-  cov_p = Reduce(rbind.data.frame, cov_p)
+  cov_p = do.call(rbind.data.frame, c(cov_p, row.names = NULL))
   cov_pl = melt(cov_p, id.vars = c("npred","element1","element2"))
   cov_pl = cov_pl[order(cov_pl$npred),]
   
@@ -288,7 +300,7 @@ cov_f = function(x, traits, v_b, cpc){
   cov_pl$element2 = setNames(key$new_name, key$old_name)[cov_pl$element2]
   cov_pl$element = apply(cov_pl[,c("element1","element2")], 1, paste0, collapse = "_")
   
-  cov_pl = cbind(cov_pl, x[rep(seq_len(nrow(x)), each = ntrait * length(cpc)), ])
+  cov_pl = cbind(cov_pl, x[rep(seq_len(nrow(x)), each = ntrait * length(cpc)), ], row.names = NULL)
   return(cov_pl)
 }
 
@@ -326,7 +338,7 @@ cor_beta_f = function(x, traits, cpc_b){
   pred.n = colnames(x)[-1]
   x.p = matrix(0, nrow = (ncol(x)-1)*2, ncol = ncol(x))
   x.p[,1] = 1
-  for(c in 2:ncol(x.p)){x.p[2*(c-1),c] =1}
+  for(c in 2:ncol(x.p)){x.p[2*(c-1),c] = 1}
   
   mv_cpc = cpc_f(x.p, cpc_b)
   mv_cor = cor_f(x.p, traits, mv_cpc)
@@ -352,7 +364,7 @@ cor_beta_f = function(x, traits, cpc_b){
                                       mv_cor$element==cors[[j]] ,"value"])
   predfl[[j]] = predf
   }
-  predcor = Reduce(rbind.data.frame, predfl)
+  predcor = do.call(rbind.data.frame, c(predfl, make.row.names = F))
   predcor = predcor[,c("element","X.Intercept.",pred.n)]
   return(predcor)
 }

@@ -48,19 +48,19 @@ data {
   int<lower=1> D; //total number of traits/dimensions
   int<lower=0> P; //total number of environmental predictors (+ intercept)
   
-  int<lower=0> id[N]; //index linking observations to individuals
-  int<lower=0> c_id[N]; //index linking observations to contexts
-  int<lower=0> idc[N]; //index linking individuals to positions in cmat
+  array[N] int<lower=0> id; //index linking observations to individuals
+  array[N] int<lower=0> c_id; //index linking observations to contexts
+  array[N] int<lower=0> idc; //index linking individuals to positions in cmat
   
   matrix[C,P] X; //environmental predictor matrix (+ intercept)
   matrix[I,I] A; //relatedness matrix
   
   int<lower=1> cm; //max number of individuals observed in a context
-  int cmat[C, cm]; //matrix with all individuals observed in each context (row)
-  int<lower=0> cn[C]; //count of individuals observed per context
+  array[C,cm] int cmat; //matrix with all individuals observed in each context (row)
+  array[C] int<lower=0> cn; //count of individuals observed per context
   int<lower=1> cnt; //total number of individuals across contexts
   
-  vector[D] z[N]; //multivariate normal response variables
+  array[N] vector[D] z; //multivariate normal response variables
 }
 
 transformed data{
