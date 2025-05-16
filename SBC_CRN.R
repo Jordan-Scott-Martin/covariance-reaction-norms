@@ -17,20 +17,6 @@ library(Matrix)
 #directory for cmdstan installation
 set_cmdstan_path("...")
 
-
-#Test model #################################################
-
-#load Gaussian NLS selection model
-SBC_mod1 = cmdstan_model(stan_file = "SBC_CRN_mod.stan", 
-                         stanc_options = list("O1"))
-
-res = SBC_mod1$sample(data = df1$generated[[1]], iter_sampling = 2000, iter_warmup = 1000,
-                      parallel_chains = 5, init = 0.001, adapt_delta = 0.99)
-
-shinystan::launch_shinystan(res)
-
-#SBC cmdstan #################################################
-
 #cache for SBC in RStan
 cache_dir = "./_basic_usage_cmdstan_SBC_cache"
 if(!dir.exists(cache_dir)) {dir.create(cache_dir) }
@@ -57,6 +43,137 @@ lkj_to_chol_corr <- function(constrained_reals, ntrait) {
 
 #load Gaussian NLS selection model
 SBC_mod1 = cmdstan_model(stan_file = "SBC_CRN_mod.stan", stanc_options = list("O1"))
+
+#function for simulating relatedness (A) matrix
+pedfun = function(popmin, popmax, ngenerations,
+                  epm, nonb, nids, I, missing=FALSE){
+  
+  # get list of individuals and their generations
+  gener=1:ngenerations
+  
+  genern = rep(1:ngenerations, times = nids)
+  ID = 1:sum(nids)
+  
+  # runs on generation-by-generation basis
+  for(i in 1:ngenerations){
+    
+    id=ID[which(genern==i)]
+    dam=rep(NA, nids[i])
+    sire=rep(NA, nids[i])
+    
+    # randomly allocates sex (0 = male, 1 = female)
+    sex=sample(c(0,1), length(id), replace=TRUE)
+    
+    # for first generation, no dams or sires are known 
+    # so remain NA
+    
+    if(i==1){
+      
+      # combine into single data frame
+      pedigree=data.frame(id=id, dam=dam, sire=sire, 
+                          generation=i, sex=sex)
+      
+    }
+    
+    else if(i>1){
+      
+      # for all generations after first
+      # list of all possible dams and sires
+      # from previous generation
+      pdams=pedigree$id[which(pedigree$generation==(i-1) &
+                                pedigree$sex==1)]
+      psires=pedigree$id[which(pedigree$generation==(i-1) &
+                                 pedigree$sex==0)]
+      
+      # determine number of pairs
+      # depending on how many males and females
+      # and the proportion of the population that is non-breeding
+      npairs=min(length(pdams), length(psires)) - 
+        round(min(length(pdams), length(psires))*nonb)
+      
+      # selects breeding males and females
+      pdams=pedigree$id[which(pedigree$generation==(i-1) & 
+                                pedigree$sex==1)]
+      psires=pedigree$id[which(pedigree$generation==(i-1) & 
+                                 pedigree$sex==0)]
+      
+      if(length(pdams)<npairs | length(psires)<npairs){
+        npairs=min(length(pdams), length(psires))
+      }
+      
+      # selects pairs from possible dams and sires
+      pairs=data.frame(dam=sample(pdams, npairs, replace=FALSE),
+                       sire=sample(psires, npairs, replace=FALSE))
+      # gives each offspring their parental pair
+      pairid=as.numeric(sample(rownames(pairs), 
+                               length(id), replace=TRUE))
+      
+      # gives each offspring their sex
+      sex=sample(c(0,1), length(id), replace=TRUE)
+      
+      # put into dataframe format
+      addped=data.frame(id=id, 
+                        dam=pairs$dam[pairid], 
+                        sire=pairs$sire[pairid],
+                        generation=i, 
+                        sex=sex)
+      
+      
+      # deals with extra-pair mating (if included)
+      if(!is.null(epm)){
+        
+        # for each individual, sample if they are extra pair
+        # if 0 not extra pair
+        # if 1 sire resampled from breeding population
+        # if 2 dam resampled
+        ext=sample(c(0,1,2), nrow(addped), 
+                   replace=TRUE, 
+                   prob = c(1-epm, epm/2, epm/2))
+        for(j in 1:nrow(addped)){
+          if(ext[j]>0){
+            if(ext[j]==1){
+              addped$sire[j]=sample(psires,1,replace=TRUE)
+            }else if (ext[j]==2){
+              addped$dam[j]=sample(pdams,1,replace=TRUE)
+            }
+            
+          }
+        }
+      }
+      
+      
+      # add new generation to the whole pedigree
+      pedigree=rbind(pedigree, addped)
+    }
+    
+  }
+  
+  ped = pedigree
+  
+  # make id's non-numeric
+  ped$id=paste("ID",ped$id, sep="")
+  ped$dam[which(!is.na(ped$dam))]=paste("ID",ped$dam[which(!is.na(ped$dam))], sep="")
+  ped$sire[which(!is.na(ped$sire))]=paste("ID",ped$sire[which(!is.na(ped$sire))], sep="")
+  ped$id=as.character(ped$id)
+  ped$dam=as.character(ped$dam)
+  ped$sire=as.character(ped$sire)
+  
+  IDs = sample(ped[ped$generation==ngenerations, "id"], I, replace=FALSE)
+  ped = MCMCglmm::prunePed(ped, keep = IDs, make.base=TRUE)
+  inv.phylo = MCMCglmm::inverseA(ped[,c("id","dam","sire")])
+  A = solve(inv.phylo$Ainv)
+  A = cov2cor(A)
+  A = (A + t(A))/2 # Not always symmetric after inversion
+  A = as.matrix(A)
+  rownames(A) = rownames(inv.phylo$Ainv)
+  colnames(A) = rownames(inv.phylo$Ainv)
+  
+  #subset to final generation
+  A_sub=A[IDs,IDs]
+  A_mat = as.matrix(nearPD(A_sub)$mat)
+  A_mat = cov2cor(A_mat)
+  return(A_mat)
+}
 
 #function for generating datasets and parameter values
 generator_function1 = function(N, Nc, npred, ntrait){
@@ -109,19 +226,28 @@ generator_function1 = function(N, Nc, npred, ntrait){
   }
   
   #construct G correlation and covariance matrices
-  Gcor = list()
+  Gcor2 = list()
   Gcov = list()
   for(c in 1:nrow(X)){
     mat = diag(1, ntrait)
     mat[lower.tri(mat)] = G_cor[[c]]
     mat[upper.tri(mat)] = mat[lower.tri(mat)]
-    Gcor[[c]] = mat
-    Gcov[[c]] = diag(G_sd[c,]) %*% mat %*% diag(G_sd[c,])
+    Gcor2[[c]] = mat
+    Gcov[[c]] = diag(G_sd[c,]) %*% Gcor2[[c]] %*% diag(G_sd[c,])
   }
   
   #relatedness matrix
-  A = rlkjcorr(1, N, 1)
+  #population properties
+  popmin = N
+  popmax = N*1.25
+  ngenerations = 10
+  nids = sample(popmin:popmax, ngenerations, replace=TRUE) #N / generation
+  epm = sample(seq(0.15, 0.25,by=0.05),1) #extra-pair mating
+  nonb = sample(seq(0.3,0.6,by=0.05),1) #proportion of non-breeding / generation
+  A = pedfun(popmin=popmin, popmax=popmax, ngenerations=ngenerations,
+             epm=epm, nonb=nonb, nids=nids, I=N, missing=FALSE)
   LA = t(chol(A))
+  
   seq = N/length(Gcov)
   G_z = rmvnorm(N, mean=rep(0,ntrait), sigma=diag(rep(1,ntrait)))
   G_z = (G_z - apply(G_z, 2, mean))/apply(G_z, 2, sd)
@@ -140,8 +266,8 @@ generator_function1 = function(N, Nc, npred, ntrait){
   
   #generate residuals
   E = rlkjcorr(1, ntrait, 10)
-  sd_E = 1
-  E_cv = diag(rep(sd_E,ntrait)) %*% E %*% diag(rep(sd_E,ntrait))
+  sd_E = rep(1,ntrait)
+  E_cv = diag(sd_E) %*% E %*% diag(sd_E)
   
   res = rmvnorm(N, mean=rep(0,ntrait), sigma=E_cv)
   
@@ -164,12 +290,12 @@ generator_function1 = function(N, Nc, npred, ntrait){
   #new index corresponding to subject position in cmat
   temp = t(cmat)
   corder = data.frame(id = temp[temp>0], c = rep(seq(1:nrow(cmat)), times = cmat_n))
-  df$idc = match(paste0(df$id, df$c_id,sep="."), paste0(corder$id,corder$c,sep="."))
+  df$idc = match(paste(df$id, df$c_id,sep="."), paste(corder$id,corder$c,sep="."))
   
   #stan data list
   list(
     variables=list(B_m = B_m, B_v = B_v, B_cpc = B_cpc, 
-                   sd_E = rep(sd_E,ntrait), L_E = t(chol(E)), Z_G = G_z),
+                   sd_E = sd_E, L_E = t(chol(E)), Z_G = G_z),
     
     generated=list(N = nrow(df), C = nrow(X), I = max(df$id),
                    D = ntrait, P = ncol(X), sd_E = sd_E, 
@@ -181,18 +307,19 @@ generator_function1 = function(N, Nc, npred, ntrait){
 
 #generate objects for SBC
 set.seed(9)
-n_sims = 100  # Number of sim per run
+n_sims = 200  # Number of sim per run
 
 start = Sys.time()
-SBCf1 = SBC_generator_function(generator_function1, N = 200, Nc = 10, npred = 2, ntrait = 3)
+SBCf1 = SBC_generator_function(generator_function1, N = 300, Nc = 10, npred = 2, ntrait = 3)
 df1 = generate_datasets(SBCf1, n_sims)
-backend1 = SBC_backend_cmdstan_sample(SBC_mod1, iter_sampling = 1000, iter_warmup = 1000, 
-                                      init = 0.001, chains = 5,  parallel_chains = 5, 
-                                      adapt_delta = 0.99, max_treedepth = 10)
+saveRDS(df1, "df1.RDS")
+backend1 = SBC_backend_cmdstan_sample(SBC_mod1, iter_sampling = 500, iter_warmup = 1000, 
+                                      init = 0.001, chains = 4,  parallel_chains = 4, 
+                                      adapt_delta = 0.90, max_treedepth = 10)
 #conduct SBC
 results1 =  compute_SBC(datasets = df1, backend = backend1, cache_mode = "results", 
                         cache_location = file.path(cache_dir, "results"),
-                        keep_fits = FALSE)
+                        keep_fits = TRUE)
 saveRDS(results1, "results_SBC_CRN.RDS")
 end = Sys.time()
 end - start
@@ -200,21 +327,11 @@ end - start
 #load results
 results1 = readRDS("results_SBC_CRN.RDS")
 
-#subset to remove problematic simulations (<1% divergence)
-keep = results1$backend_diagnostics$sim_id[
-  results1$backend_diagnostics$n_divergent < .001*1000*5]
-results1nd = results1[keep]
-
 #plot results
-plot_rank_hist(results1, variables = paste0("B_v","[",rep(1:4,3),",",rep(1:3,each=4),"]"), 
-               prob = 0.95)
-plot_ecdf_diff(results1, variables = paste0("B_v","[",rep(1:4,3),",",rep(1:3,each=4),"]"), 
-               prob = 0.95, K = "max")
-plot_ecdf_diff(results1, variables = paste0("B_cpc","[",rep(1:4,3),",",rep(1:3,each=4),"]"), prob = 0.95)
-
-
-bdiff = plot_ecdf_diff(results1, variables = paste0("B_v","[",rep(1:4,3),",",rep(1:3,each=4),"]"), prob = 0.95)
-cdiff = plot_ecdf_diff(results1, variables = paste0("B_cpc","[",rep(1:4,3),",",rep(1:3,each=4),"]"), prob = 0.95)
+bdiff = 
+  plot_ecdf_diff(results1, variables = paste0("B_v","[",rep(1:4,3),",",rep(1:3,each=4),"]"), prob = 0.95)
+cdiff = 
+  plot_ecdf_diff(results1, variables = paste0("B_cpc","[",rep(1:4,3),",",rep(1:3,each=4),"]"), prob = 0.95)
 
 bdiff$facet$params$nrow=4
 bdiff$facet$params$ncol=3
@@ -258,5 +375,5 @@ cdiff =
 
 library(cowplot)
 cbp = plot_grid(bdiff, cdiff, ncol = 2, rel_widths = c(1,1))
-save_plot("fig 2 crn_v2.png", cbp, base_height = 2.5, base_width = 5.5)
+save_plot("fig s1 results.png", cbp, base_height = 2.5, base_width = 5.5)
 

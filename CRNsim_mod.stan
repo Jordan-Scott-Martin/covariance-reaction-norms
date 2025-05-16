@@ -1,4 +1,4 @@
-functions{
+functions {
 
 //functions are used fom prior work by
 //Dan Schrage (https://gitlab.com/dschrage/rcovreg)
@@ -32,7 +32,7 @@ functions{
         } else if(i > j) {
           x[i,j] = constrained_reals[z_counter]*sqrt(1 - sum_square_x(x, i, j));
           z_counter += 1;
-        } else { 
+        } else {
           x[i,j] = 0;
         }
       }
@@ -41,38 +41,42 @@ functions{
   }
 }
 
-data{
-  int<lower=1> N;
-  int<lower=1> C;
-  int<lower=1> I;
-  int<lower=1> D;
-  int<lower=0> P;
+data {
+  int<lower=1> N; //total number of observations
+  int<lower=1> C; //total number of environmental contexts
+  int<lower=1> I; //total number of subjects
+  int<lower=1> D; //total number of traits/dimensions
+  int<lower=0> P; //total number of environmental predictors (+ intercept)
   
-  array[N] int<lower=0> id;
-  array[N] int<lower=0> c_id;
-  array[N] int<lower=0> idc;
+  array[N] int<lower=0> id; //index linking observations to individuals
+  array[N] int<lower=0> c_id; //index linking observations to contexts
+  array[N] int<lower=0> idc; //index linking individuals to positions in cmat
   
-  matrix[C,P] X;
-  matrix[I,I] A;
+  matrix[C,P] X; //environmental predictor matrix (+ intercept)
+  matrix[I,I] A; //relatedness matrix
   
-  int<lower=1> cm;
-  array[C, cm] int cmat; //array of integers
-  array[C] int<lower=0> cn;
-  int<lower=1> cnt;
+  int<lower=1> cm; //max number of individuals observed in a context
+  array[C,cm] int cmat; //matrix with all individuals observed in each context (row)
+  array[C] int<lower=0> cn; //count of individuals observed per context
+  int<lower=1> cnt; //total number of individuals across contexts
   
-  array[N] vector[D] z;
+  array[N] vector[D] z; //multivariate normal response variables
 }
 
 transformed data{
   matrix[I, I] LA = cholesky_decompose(A);
-  int ncor = (D*(D-1))/2;
+  int ncor = (D*(D-1))/2; //unique cov/cor parameters
+  // Compute, thin, and then scale QR decomposition
+  matrix[C, P] Q = qr_thin_Q(X) * sqrt(C-1);
+  matrix[P, P] R = qr_thin_R(X) / sqrt(C-1);
+  matrix[P, P] R_inv = inverse(R);
 }
 
-parameters{
+parameters {
   //fixed effects
-  matrix[P, D] B_m; //RN of means
-  matrix[P, D] B_v; //RN of variances
-  matrix[P, ncor] B_cpc; //RN of canonical partial corrs
+  matrix[P, D] B_mq; //RN of means
+  matrix[P, D] B_vq; //RN of variances
+  matrix[P, ncor] B_cpcq; //RN of canonical partial correlations
 
   //random effects
   matrix[cnt, D] Z_G; //all context-specific additive genetic values
@@ -80,16 +84,16 @@ parameters{
   vector<lower=0>[D] sd_E; //residual standard deviations
 }
 
-model{
+model {
   //predicted values from reaction norms
   //means
-  matrix[C, D] mu = X * B_m;
+  matrix[C, D] mu = Q * B_mq;
                        
   //variances
-  matrix[C, D] sd_G = sqrt(exp(X * B_v));
+  matrix[C, D] sd_G = sqrt(exp(Q * B_vq));
   
   //correlations (expressed as canonical partial correlations)
-  matrix[C, ncor] cpc_G = tanh(X * B_cpc);
+  matrix[C, ncor] cpc_G = tanh(Q * B_cpcq);
 
   //scale context-specific multivariate additive genetic effects
   matrix[cnt, D] mat_G;
@@ -101,7 +105,7 @@ model{
       pos = pos + cn[c];                             
   }
                   
-  //likelihood
+//likelihood
   for(n in 1:N){
   row_vector[3] lin_pred = mu[c_id[n]] + mat_G[idc[n]];
   z[n] ~ multi_normal_cholesky(lin_pred, 
@@ -110,13 +114,26 @@ model{
   }
   
   //priors
-  to_vector(B_m) ~ normal(0,1);
-  to_vector(B_v) ~ normal(0,1);
-  to_vector(B_cpc) ~ normal(0,1);
+  to_vector(B_mq) ~ normal(0,1);
+  to_vector(B_vq) ~ normal(0,1);
+  to_vector(B_cpcq) ~ normal(0,1);
   to_vector(Z_G) ~ std_normal();
-  
   sd_E ~ exponential(2);
   L_E ~ lkj_corr_cholesky(2);
 }
 
+generated quantities{
+  matrix[D,D] E = L_E * L_E'; //residual correlations
+  matrix[P,D] B_m; //mean RN parameters for X
+  matrix[P,D] B_v; //variance RN parameters for X
+  matrix[P,ncor] B_cpc; //partial correlation RN parameters for X
 
+  for(d in 1:D){
+    B_m[,d]= R_inv * B_mq[,d];
+    B_v[,d]= R_inv * B_vq[,d];
+    }  
+
+  for(d in 1:ncor){
+    B_cpc[,d]= R_inv * B_cpcq[,d];
+    }
+}
