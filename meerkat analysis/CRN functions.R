@@ -7,6 +7,7 @@ library(reshape2)
 library(ggplot2)
 library(tidybayes)
 library(plyr)
+library(Matrix)
 library(mvtnorm)
 library(rethinking)
 library(posterior)
@@ -20,7 +21,7 @@ library(posterior)
 #X = design matrix of covariates
 #l_es = lower effect size (absolute value)
 #u_es = upper effect size (absolute value)
-sim_CRN_QG = function(N, Nc, npred, ntrait, l_es, u_es){
+sim_CRN_QG = function(N, Nc, npred, ntrait, l_es, u_es, standl = TRUE){
   try(if(N/Nc %% 2==1) stop("N/Nc must be even for balanced sampling."))
   try(if(l_es < 0) stop("l_es is an absolute value. Please input a positive number."))
   try(if(u_es < 0) stop("u_es is an absolute value. Please input a positive number."))
@@ -130,16 +131,24 @@ sim_CRN_QG = function(N, Nc, npred, ntrait, l_es, u_es){
   #new index corresponding to subject position in cmat
   temp = t(cmat)
   corder = data.frame(id = temp[temp>0], c = rep(seq(1:nrow(cmat)), times = cmat_n))
-  df$idc = match(paste0(df$id, df$c_id,sep="."), paste0(corder$id,corder$c,sep="."))
+  df$idc = match(paste(df$id, df$c_id,sep="."), paste(corder$id,corder$c,sep="."))
+  
+  if(standl == TRUE){
   
   #stan data list
-  list(N = nrow(df), C = nrow(X), I = max(df$id),
+  return(list(N = nrow(df), C = nrow(X), I = max(df$id),
        D = ntrait, P = ncol(X), 
        id = df$id, c_id = df$c_id, idc = df$idc,
        X = X, A = A, cmat = cmat, cm = ncol(cmat),cn = cmat_n,
        cnt = sum(cmat_n), z = df[,c(paste0("z",1:ntrait))],
        B_m = B_m, B_v = B_v, B_cpc = B_cpc, Gcov = Gcov,
-       sd_E = rep(1,ntrait), E = t(chol(E)) %*% chol(E))
+       sd_E = rep(1,ntrait), E = t(chol(E)) %*% chol(E)))
+  }
+  if(standl == FALSE){
+    standf = data.frame(id = df$id, df[,c(paste0("z",1:ntrait))], X[,-1])
+    rownames(standf) = 1:nrow(standf)
+    return(standf)
+  }
 }
 
 #this function simplifies the extraction of posterior samples
@@ -196,7 +205,7 @@ v_f = function(x, traits, v_b){
   key = data.frame(old_name = seq(1:ntrait), new_name = traits)
   v$element = setNames(key$new_name, key$old_name)[v$element]
   v = v[order(v$npred),]
-  v = cbind(v, X_pred[rep(seq_len(nrow(x)), each = length(traits) * nrow(v_b)), ])
+  v = cbind(v, x[rep(seq_len(nrow(x)), each = length(traits) * nrow(v_b)), ])
   return(v)
 }
 
@@ -219,6 +228,7 @@ cpc_f = function(x, cpc_b){
 #cpc = output of cpc_f (predicted partial correlations)
 cor_f = function(x, traits, cpc){
   ntrait = length(traits)
+  ncor = (ntrait*(ntrait-1))/2
   gcor_cpc = list()
   for(r in 1:length(cpc)){
     cor_p = list()
@@ -249,8 +259,7 @@ cor_f = function(x, traits, cpc){
   cor_pl$element1 = setNames(key$new_name, key$old_name)[cor_pl$element1]
   cor_pl$element2 = setNames(key$new_name, key$old_name)[cor_pl$element2]
   cor_pl$element = apply(cor_pl[,c("element1","element2")], 1, paste0, collapse = "_")
-  
-  cor_pl = cbind(cor_pl, x[rep(seq_len(nrow(x)), each = ntrait * length(cpc)), ], row.names = NULL)
+  cor_pl = cbind(cor_pl[order(cor_pl$npred),], x[rep(seq_len(nrow(x)), each = ncor * length(cpc)), ], row.names = NULL)
   return(cor_pl)
 }
 
@@ -261,7 +270,8 @@ cor_f = function(x, traits, cpc){
 #v_b = matrix of beta coefficients for variances
 #cpc = output of cpc_f (predicted partial correlations)
 cov_f = function(x, traits, v_b, cpc){
-  ntrait = length(traits) 
+  ntrait = length(traits)
+  ncor = (ntrait*(ntrait-1))/2
   v = list()
   for(r in 1:nrow(v_b)){
     v[[r]] = exp(as.matrix(x) %*% v_b[r,,] )
@@ -286,7 +296,7 @@ cov_f = function(x, traits, v_b, cpc){
     m = gcovl[[i]][[p]]
     temp[[p]] = data.frame(element1 = which(upper.tri(m),arr.ind=TRUE)[,1],
                            element2 = which(upper.tri(m),arr.ind=TRUE)[,2],
-                           correlation = m[upper.tri(m)], npred = p) 
+                           covariance = m[upper.tri(m)], npred = p) 
     }
     df = do.call(rbind.data.frame, c(temp, make.row.names = F))
     cov_p[[i]] = df
@@ -300,7 +310,7 @@ cov_f = function(x, traits, v_b, cpc){
   cov_pl$element2 = setNames(key$new_name, key$old_name)[cov_pl$element2]
   cov_pl$element = apply(cov_pl[,c("element1","element2")], 1, paste0, collapse = "_")
   
-  cov_pl = cbind(cov_pl, x[rep(seq_len(nrow(x)), each = ntrait * length(cpc)), ], row.names = NULL)
+  cov_pl = cbind(cov_pl[order(cov_pl$npred),], x[rep(seq_len(nrow(x)), each = ncor * length(cpc)), ], row.names = NULL)
   return(cov_pl)
 }
 
